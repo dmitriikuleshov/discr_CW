@@ -1,6 +1,7 @@
 from flask import Flask, render_template_string, request
 from pyvis.network import Network
 import networkx as nx
+from typing import Tuple, Dict
 
 app = Flask(__name__)
 
@@ -27,15 +28,25 @@ html_template = """
 <body>
     <div class="container py-5">
         <h1 class="text-center mb-4">Graph Editor</h1>
-        
+
         {% if not is_bipartite %}
             <div class="alert alert-danger text-center">The graph is not bipartite!</div>
+        {% else %}
+            <div class="alert alert-success text-center">The graph is bipartite!</div>
         {% endif %}
-        
+
+        {% if error is not none %}
+            <div class="alert alert-danger text-center">{{ error }}</div>
+        {% endif %}
+
         <div class="row justify-content-center">
             <div class="col-12 col-md-6 mb-3">
                 <form class="form-inline justify-content-center" action="/add_node" method="post">
                     <input type="text" class="form-control mb-2 mr-sm-2" name="node" placeholder="Node Name">
+                    <select name="color" class="form-control mb-2 mr-sm-2">
+                        <option value="blue">Blue</option>
+                        <option value="yellow">Yellow</option>
+                    </select>
                     <button type="submit" class="btn btn-primary mb-2">Add Node</button>
                 </form>
             </div>
@@ -60,7 +71,7 @@ html_template = """
                 </form>
             </div>
         </div>
-        
+
         <div class="text-center">
             <form class="d-inline" action="/find_matching" method="post">
                 <button type="submit" class="btn btn-success mb-2">Find Max Matching</button>
@@ -72,7 +83,7 @@ html_template = """
                 <button type="submit" class="btn btn-warning mb-2">Clear Graph</button>
             </form>
         </div>
-        
+
         <div id="graph" class="graph-container">{{graph|safe}}</div>
     </div>
 </body>
@@ -81,93 +92,90 @@ html_template = """
 
 
 @app.route("/", methods=["GET"])
-def home():
-    # Проверка графа на двудольность и окрашивание вершин
-    is_bipartite, color_map = check_bipartite(G)
+def home_action(error=None, find_matching=False):
+    if not find_matching:
+        reset_edges_colors()
+    # Проверка графа на двудольность
+    is_bipartite = check_bipartite()
 
     # Визуализация графа
     net = Network(height="750px", width="100%", bgcolor="#222222", font_color="white")
     for node in G.nodes:
-        net.add_node(node, color=color_map.get(node, "#e0e0e0"))  # Стандартный цвет для вершин
+        net.add_node(node, color=G.nodes[node].get('color', "#e0e0e0"))
     for edge in G.edges:
-        net.add_edge(edge[0], edge[1], color=G.edges[edge].get('color', '#e0e0e0'))  # Стандартный цвет для рёбер
+        net.add_edge(edge[0], edge[1], color=G.edges[edge].get('color', '#e0e0e0'))
     net.save_graph("graph.html")
     with open("graph.html", "r") as f:
         graph_html = f.read()
 
-    return render_template_string(html_template, graph=graph_html, is_bipartite=is_bipartite)
+    return render_template_string(html_template, graph=graph_html, is_bipartite=is_bipartite, error=error)
 
 
-def check_bipartite(graph):
-    if graph.number_of_nodes() == 0:
-        return True, {}
-    try:
-        if nx.is_bipartite(graph):
-            color_map = {}
-            for node in nx.bipartite.sets(graph)[0]:
-                color_map[node] = "blue"
-            for node in nx.bipartite.sets(graph)[1]:
-                color_map[node] = "yellow"
-            return True, color_map
-        else:
-            return False, {}
-    except nx.AmbiguousSolution:
-        return False, {}
+def check_bipartite() -> Tuple[bool, dict]:
+    color_map = {}
+    for edge in G.edges():
+        node1, node2 = edge
+        node1_color = G.nodes[node1].get('color')
+        node2_color = G.nodes[node2].get('color')
+        color_map[node1] = node1_color
+        color_map[node2] = node2_color
+        # Если узлы имеют одинаковый цвет, граф не является двудольным
+        if node1_color == node2_color:
+            return False, color_map
+    return True, color_map
 
 
 @app.route("/add_node", methods=["POST"])
-def add_node():
-    node = request.form.get("node")
-    G.add_node(node)
-    return home()
+def add_node_action():
+    node_name = request.form.get("node")
+    color = request.form.get("color")
+    if not G.has_node(node_name):
+        G.add_node(node_name, color=color)
+        return home_action()
+    return home_action(error=f"Node '{node_name}' already exists")
 
 
 @app.route("/add_edge", methods=["POST"])
-def add_edge():
+def add_edge_action():
     node1 = request.form.get("node1")
     node2 = request.form.get("node2")
-    G.add_edge(node1, node2)
-    return home()
+    if not G.has_node(node1) and not G.has_node(node2):
+        return home_action(error=f"Node '{node1}' does not exist. Node '{node2}' does not exist.")
+    if not G.has_node(node1):
+        return home_action(error=f"Node '{node1}' does not exist")
+    if not G.has_node(node2):
+        return home_action(error=f"Node '{node2}' does not exist")
+
+    if not G.has_edge(node1, node2):
+        node1_color = G.nodes[node1].get('color')
+        node2_color = G.nodes[node2].get('color')
+        if node1_color == node2_color:
+            return home_action(error="For a bipartite graph, it is impossible "
+                                     "to connect vertices from the same fraction.")
+        G.add_edge(node1, node2)
+    return home_action()
 
 
 @app.route("/remove_node", methods=["POST"])
-def remove_node():
+def remove_node_action():
     node = request.form.get("node")
     if G.has_node(node):
         G.remove_node(node)
-    return home()
+    return home_action()
 
 
 @app.route("/remove_edge", methods=["POST"])
-def remove_edge():
+def remove_edge_action():
     node1 = request.form.get("node1")
     node2 = request.form.get("node2")
     if G.has_edge(node1, node2):
         G.remove_edge(node1, node2)
-    return home()
-
-
-def simple_max_matching(graph):
-    # Формат графа предполагается dict, где ключ - вершина, значение - список смежных вершин
-    visited = set()  # Множество посещенных вершин
-    matching = []  # Список рёбер в паросочетании
-
-    for node in graph:
-        if node not in visited:
-            for neighbour in graph[node]:
-                # Если соседняя вершина не посещена, добавляем ребро в паросочетание
-                if neighbour not in visited:
-                    matching.append((node, neighbour))
-                    visited.add(node)
-                    visited.add(neighbour)
-                    break  # Выходим из цикла, чтобы не добавлять лишние рёбра для одной вершины
-
-    return matching
+    return home_action()
 
 
 def kunh_max_matching(G):
     # Получаем множества вершин для каждой доли, проверяем двудольность графа
-    is_bipartite, color_map = check_bipartite(G)
+    is_bipartite, color_map = check_bipartite()
     if not is_bipartite:
         raise ValueError("Graph is not bipartite, maximal matching cannot be found using Kuhn's algorithm")
 
@@ -202,7 +210,8 @@ def kunh_max_matching(G):
 
 
 @app.route("/find_matching", methods=["POST"])
-def find_matching():
+def find_matching_action():
+    global G
     # Находим максимальное паросочетание с использованием networkx
     matching = kunh_max_matching(G)
 
@@ -214,21 +223,26 @@ def find_matching():
             G.edges[u, v]['color'] = "#e0e0e0"
 
     # Возвращаем обновлённый граф в шаблон
-    return home()
+    return home_action(find_matching=True)
+
+
+def reset_edges_colors():
+    global G
+    for u, v in G.edges:
+        G.edges[u, v]['color'] = "#e0e0e0"
 
 
 @app.route("/reset_colors", methods=["POST"])
-def reset_colors():
-    for edge in G.edges:
-        G.edges[edge]['color'] = "#e0e0e0"
-    return home()
+def reset_edges_colors_action():
+    reset_edges_colors()
+    return home_action()
 
 
 @app.route("/clear_graph", methods=["POST"])
-def clear_graph():
+def clear_graph_action():
     global G
-    G = nx.Graph()  # Пересоздаем граф, тем самым удаляя все вершины и ребра
-    return home()
+    G.clear()
+    return home_action()
 
 
 if __name__ == "__main__":
