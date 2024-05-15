@@ -165,10 +165,46 @@ def simple_max_matching(graph):
     return matching
 
 
+def kunh_max_matching(G):
+    # Получаем множества вершин для каждой доли, проверяем двудольность графа
+    is_bipartite, color_map = check_bipartite(G)
+    if not is_bipartite:
+        raise ValueError("Graph is not bipartite, maximal matching cannot be found using Kuhn's algorithm")
+
+    # Инициализация структур данных
+    match = {v: None for v in G.nodes()}  # Используем идентификаторы вершин вместо индексов
+    visited = set()
+
+    def try_kuhn(v):
+        # Проверяем только непомеченные вершины
+        if v in visited:
+            return False
+        visited.add(v)
+        for to in G[v]:  # Перебор смежных вершин
+            if match[to] is None or try_kuhn(match[to]):
+                match[to] = v
+                return True
+        return False
+
+    # Перебор для вершин одной доли
+    for v in color_map:
+        if color_map[v] == 'blue':  # Предполагаем, что синяя доля - первая доля двудольного графа
+            visited.clear()
+            try_kuhn(v)
+
+    # Восстановление паросочетания
+    matching = []
+    for v in G.nodes():
+        if match[v] is not None:
+            matching.append((v, match[v]))
+
+    return matching
+
+
 @app.route("/find_matching", methods=["POST"])
 def find_matching():
     # Находим максимальное паросочетание с использованием networkx
-    matching = simple_max_matching(G)
+    matching = kunh_max_matching(G)
 
     # Окрашиваем рёбра паросочетания в красный цвет
     for u, v in G.edges():
